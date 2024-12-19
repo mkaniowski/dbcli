@@ -1,0 +1,4 @@
+./data/*
+./orientdb_config/*
+./orientdb_data/*
+./output/*
