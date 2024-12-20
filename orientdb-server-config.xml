@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<orient-server>
+    <properties>
+        <entry value="false" name="storage.useWAL"/>
+        <entry value="true" name="environment.concurrent"/>
+        <entry value="false" name="memory.directMemory.safeMode"/>
+        <entry value="1024" name="storage.openFiles.limit"/>
+        <entry value="false" name="tx.useLog"/>
+        <entry value="65536" name="network.socketBufferSize"/>
+        <entry value="32768" name="network.binary.maxLength"/>
+        <entry value="2000000" name="network.http.maxLength"/>
+        <entry value="true" name="query.parallelAuto"/>
+    </properties>
+</orient-server>

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<orient-server>
+    <!-- Server-level settings -->
+    <parameters>
+        <!-- Memory and Disk Cache -->
+        <!-- Increase this to match available container memory. E.g., for a container with 8GB RAM, try 4096 or more -->
+        <entry name="storage.diskCache.bufferSize" value="6144"/>
+
+        <!-- Set this to improve performance by disabling the WAL, trading off durability -->
+        <entry name="storage.useWAL" value="false"/>
+        <entry name="storage.wal.syncOnPageFlush" value="false"/>
+        <!-- If you must use WAL for some durability, consider smaller segments and asynchronous syncs -->
+        <!--<entry name="storage.wal.autoRestore" value="false"/>-->
+        <!--<entry name="storage.wal.maxSize" value="1024"/>-->
+
+        <!-- Increase internal thread pools for parallel operations -->
+        <entry name="server.channel.minPool" value="100"/>
+        <entry name="server.channel.maxPool" value="1000"/>
+
+        <!-- Reduce sync operations on journaling -->
+        <entry name="storage.makeFullCheckPointAfterCreate" value="false"/>
+        <entry name="storage.checkpointLockTimeout" value="15000"/> <!-- Reduced timeouts -->
+
+        <!-- Disable security-related overhead if it's acceptable -->
+        <entry name="security.userPasswordSaltIterations" value="1"/>
+
+        <!-- Reduce command timeout -->
+        <entry name="command.timeout" value="0"/>
+    </parameters>
+
+    <!-- Handlers: Keep only what you need -->
+    <handlers>
+        <!-- Disable JMX and other metrics to reduce overhead -->
+        <!-- <handler class="com.orientechnologies.orient.server.handler.OJMXPlugin"/> -->
+    </handlers>
+
+    <!-- Network Configuration -->
+    <network>
+        <protocols>
+            <protocol name="binary" implementation="com.orientechnologies.orient.server.network.protocol.binary.ONetworkProtocolBinary"/>
+            <protocol name="http" implementation="com.orientechnologies.orient.server.network.protocol.http.ONetworkProtocolHttpDb"/>
+        </protocols>
+        <listeners>
+            <!-- Binary listener -->
+            <listener protocol="binary" ip-address="0.0.0.0" port-range="2424-2430" socket="default"/>
+            <!-- HTTP listener if needed; can be disabled for performance -->
+            <listener protocol="http" ip-address="0.0.0.0" port-range="2480-2490" socket="default">
+                <commands>
+                    <command pattern="GET|www GET|studio/ GET| GET|*.htm GET|*.html GET|*.xml GET|*.jpeg GET|*.jpg GET|*.png GET|*.gif GET|*.js GET|*.css GET|*.swf GET|*.ico GET|*.txt GET|*.otf GET|*.pjs GET|*.svg" implementation="com.orientechnologies.orient.server.network.protocol.http.command.get.OServerCommandGetStaticContent">
+                        <parameters>
+                            <entry name="http.cache:*.htm *.html" value="Cache-Control: no-cache, no-store, max-age=0, must-revalidate\r\nPragma: no-cache"/>
+                            <entry name="http.cache:default" value="Cache-Control: max-age=120"/>
+                        </parameters>
+                    </command>
+                </commands>
+                <parameters>
+                    <parameter name="network.http.charset" value="utf-8"/>
+                </parameters>
+            </listener>
+        </listeners>
+
+        <!-- Increase network pools and reduce timeouts -->
+        <entry name="network.binary.readTimeout" value="0"/>
+        <entry name="network.binary.writeTimeout" value="0"/>
+        <entry name="network.http.readTimeout" value="0"/>
+        <entry name="network.http.writeTimeout" value="0"/>
+    </network>
+
+    <!-- Users: minimal configuration -->
+    <users>
+        <user name="root" password="rootpwd" resources="*" />
+    </users>
+
+    <!-- Databases -->
+    <databases>
+        <!-- Preload databases if known -->
+        <!-- <database name="dbcli" path="embedded:./databases/dbcli"> -->
+        <!-- <properties> -->
+        <!-- <entry name="storage.useWAL" value="false"/> -->
+        <!-- </properties> -->
+        <!-- </database> -->
+    </databases>
+
+
+    <handler class="com.orientechnologies.orient.server.hazelcast.OHazelcastPlugin">
+        <parameters>
+            <parameter name="enabled" value="false" />
+        </parameters>
+    </handler>
+
+    <properties>
+        <!-- Set logging to error only -->
+        <entry name="log.console.level" value="fine"/>
+        <entry name="log.file.level" value="fine"/>
+    </properties>
+</orient-server>

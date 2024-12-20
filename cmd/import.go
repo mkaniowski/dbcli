@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -61,11 +62,21 @@ The directory should contain:
 			log.Fatalf("Failed to create schema: %v", err)
 		}
 
+		startImport := time.Now()
+		startLoadPopularity := time.Now()
+
 		// Load popularity data
 		popularityMap, popularityVertices := loadPopularity(filepath.Join(dataDir, "popularity_iw.csv"))
 
+		elapsedLoadPopularity := time.Since(startLoadPopularity)
+		startLoadTaxonomy := time.Now()
+
 		// Load taxonomy edges and gather vertices
 		taxonomyVertices, edgePairs := loadEdges(filepath.Join(dataDir, "taxonomy_iw.csv"))
+
+		elapsedLoadTaxonomy := time.Since(startLoadTaxonomy)
+
+		startMerge := time.Now()
 
 		// Merge all vertices: from popularity and taxonomy
 		allVertices := make(map[string]struct{})
@@ -76,10 +87,18 @@ The directory should contain:
 			allVertices[v] = struct{}{}
 		}
 
+		elapsedMerge := time.Since(startMerge)
+
+		startInsertVertecies := time.Now()
+
 		// Insert all vertices in batches
 		if err := insertAllVertices(allVertices, popularityMap); err != nil {
 			log.Fatalf("Failed to insert vertices: %v", err)
 		}
+
+		elapsedInsertVertices := time.Since(startInsertVertecies)
+
+		startFetchVertexRIDs := time.Now()
 
 		// Create a name->rid map after all vertices are inserted
 		vertexRIDMap, err := fetchAllVertexRIDs()
@@ -87,12 +106,27 @@ The directory should contain:
 			log.Fatalf("Failed to fetch vertex RIDs: %v", err)
 		}
 
+		elapsedFetchVertexRIDs := time.Since(startFetchVertexRIDs)
+
+		startInsertEdges := time.Now()
+
 		// Insert edges in batches using known RIDs
 		if err := insertAllEdges(edgePairs, vertexRIDMap); err != nil {
 			log.Fatalf("Failed to insert edges: %v", err)
 		}
 
+		elapsedInsertEdges := time.Since(startInsertEdges)
+
 		fmt.Println("Data import completed successfully!")
+
+		elapsedImport := time.Since(startImport)
+		log.Printf("Import completed in %s", elapsedImport)
+		log.Printf("Load popularity: %s", elapsedLoadPopularity)
+		log.Printf("Load taxonomy: %s", elapsedLoadTaxonomy)
+		log.Printf("Merge vertices: %s", elapsedMerge)
+		log.Printf("Insert vertices: %s", elapsedInsertVertices)
+		log.Printf("Fetch vertex RIDs: %s", elapsedFetchVertexRIDs)
+		log.Printf("Insert edges: %s", elapsedInsertEdges)
 	},
 }
 

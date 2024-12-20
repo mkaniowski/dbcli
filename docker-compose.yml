@@ -5,18 +5,20 @@ services:
     image: orientdb:3.2.9
     container_name: dbcli
     restart: unless-stopped
-    command: server.sh -Ddistributed=false -Dstorage.useWAL=false
+    command: server.sh -Ddistributed=false -Dstorage.useWAL=false -XX:+PerfDisableSharedMem -Dstorage.wal.syncOnPageFlush=false -Dtx.useLog=false
     ports:
       - "2424:2424"
       - "2480:2480"
+      - "2425:2425"
     environment:
       ORIENTDB_ROOT_PASSWORD: rootpwd
       ORIENTDB_USERNAME: admin
       ORIENTDB_PASSWORD: adminpwd
       ORIENTDB_DATABASE: dbcli
+      ORIENTDB_OPTS_MEMORY: "-Xms1G -Xmx16G"
     volumes:
       - ./orientdb_data:/orientdb/databases
-      - orientdb_config:/orientdb/config
+      - ./orientdb_config:/orientdb/config
 
 volumes:
   orientdb_data:
