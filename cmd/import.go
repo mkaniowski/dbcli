@@ -22,28 +22,15 @@ const (
 	orientDBUsername = "root"
 	orientDBPassword = "rootpwd"
 	databaseName     = "dbcli"
-	batchSize        = 7400 // Number of records per batch
+	batchSize        = 25000 // Adjust batch size as needed
 )
 
-// BatchOperation represents an operation in the batch request
-type BatchOperation struct {
-	Type     string                 `json:"type"`
-	Language string                 `json:"language,omitempty"`
-	Command  string                 `json:"command,omitempty"`
-	Record   map[string]interface{} `json:"record,omitempty"`
-}
-
-// BatchRequest represents a batch request
-type BatchRequest struct {
-	Transaction bool             `json:"transaction"`
-	Operations  []BatchOperation `json:"operations"`
-}
-
-// importCmd represents the import command
 var importCmd = &cobra.Command{
 	Use:   "import [data directory]",
-	Short: "Import data from popularity and taxonomy files into OrientDB",
+	Short: "Import data from popularity and taxonomy files into OrientDB using script batches",
 	Long: `Import vertices and edges from the given data directory into OrientDB.
+This version uses "type":"script" operations, splitting into batches, avoiding re-creating vertices,
+and not using transactions.
 The directory should contain:
 - popularity_iw.csv
 - taxonomy_iw.csv
@@ -63,70 +50,42 @@ The directory should contain:
 		}
 
 		startImport := time.Now()
-		startLoadPopularity := time.Now()
 
-		// Load popularity data
-		popularityMap, popularityVertices := loadPopularity(filepath.Join(dataDir, "popularity_iw.csv"))
+		// Load popularity
+		popularityMap := loadPopularity(filepath.Join(dataDir, "popularity_iw.csv"))
 
-		elapsedLoadPopularity := time.Since(startLoadPopularity)
-		startLoadTaxonomy := time.Now()
+		// Load all edges
+		edges := loadAllEdges(filepath.Join(dataDir, "taxonomy_iw.csv"))
 
-		// Load taxonomy edges and gather vertices
-		taxonomyVertices, edgePairs := loadEdges(filepath.Join(dataDir, "taxonomy_iw.csv"))
+		// We'll need to send multiple batches if edges > batchSize
+		var vertexRIDMap = make(map[string]string) // vertexName -> RID
 
-		elapsedLoadTaxonomy := time.Since(startLoadTaxonomy)
+		for i := 0; i < len(edges); i += batchSize {
+			end := i + batchSize
+			if end > len(edges) {
+				end = len(edges)
+			}
+			batchEdges := edges[i:end]
 
-		startMerge := time.Now()
+			// Build script for this batch
+			scriptCommands, _ := buildBatchScript(batchEdges, vertexRIDMap, popularityMap)
 
-		// Merge all vertices: from popularity and taxonomy
-		allVertices := make(map[string]struct{})
-		for v := range popularityVertices {
-			allVertices[v] = struct{}{}
+			// Send script
+			newlyCreatedVertices, err := sendScriptBatch(scriptCommands)
+			if err != nil {
+				log.Fatalf("Batch execution failed: %v", err)
+			}
+
+			// Update vertexRIDMap with newly created vertices' RIDs
+			for name, rid := range newlyCreatedVertices {
+				vertexRIDMap[name] = rid
+			}
+
+			log.Printf("Processed %d edges so far...", end)
 		}
-		for v := range taxonomyVertices {
-			allVertices[v] = struct{}{}
-		}
-
-		elapsedMerge := time.Since(startMerge)
-
-		startInsertVertecies := time.Now()
-
-		// Insert all vertices in batches
-		if err := insertAllVertices(allVertices, popularityMap); err != nil {
-			log.Fatalf("Failed to insert vertices: %v", err)
-		}
-
-		elapsedInsertVertices := time.Since(startInsertVertecies)
-
-		startFetchVertexRIDs := time.Now()
-
-		// Create a name->rid map after all vertices are inserted
-		vertexRIDMap, err := fetchAllVertexRIDs()
-		if err != nil {
-			log.Fatalf("Failed to fetch vertex RIDs: %v", err)
-		}
-
-		elapsedFetchVertexRIDs := time.Since(startFetchVertexRIDs)
-
-		startInsertEdges := time.Now()
-
-		// Insert edges in batches using known RIDs
-		if err := insertAllEdges(edgePairs, vertexRIDMap); err != nil {
-			log.Fatalf("Failed to insert edges: %v", err)
-		}
-
-		elapsedInsertEdges := time.Since(startInsertEdges)
 
 		fmt.Println("Data import completed successfully!")
-
-		elapsedImport := time.Since(startImport)
-		log.Printf("Import completed in %s", elapsedImport)
-		log.Printf("Load popularity: %s", elapsedLoadPopularity)
-		log.Printf("Load taxonomy: %s", elapsedLoadTaxonomy)
-		log.Printf("Merge vertices: %s", elapsedMerge)
-		log.Printf("Insert vertices: %s", elapsedInsertVertices)
-		log.Printf("Fetch vertex RIDs: %s", elapsedFetchVertexRIDs)
-		log.Printf("Insert edges: %s", elapsedInsertEdges)
+		log.Printf("Total import time: %s", time.Since(startImport))
 	},
 }
 
@@ -134,7 +93,6 @@ func init() {
 	rootCmd.AddCommand(importCmd)
 }
 
-// ensureDatabaseExists checks if the database exists and creates it if not
 func ensureDatabaseExists() error {
 	dbCheckURL := fmt.Sprintf("%s/database/%s", orientDBBaseURL, databaseName)
 
@@ -179,18 +137,12 @@ func ensureDatabaseExists() error {
 }
 
 func createSchema() error {
-	// The class V and E are system classes and already exist.
-	// Just ensure the property and index are created.
 	if err := runSQLCommand("CREATE PROPERTY V.name STRING"); err != nil {
-		// Ignore if property already exists
 		log.Printf("Warning: could not create property V.name: %v", err)
 	}
-
 	if err := runSQLCommand("CREATE INDEX V.name UNIQUE"); err != nil {
-		// Ignore if index already exists
 		log.Printf("Warning: could not create index on V.name: %v", err)
 	}
-
 	return nil
 }
 
@@ -216,7 +168,6 @@ func runSQLCommand(command string) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("command failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
 
@@ -224,10 +175,8 @@ func urlEncode(s string) string {
 	return strings.ReplaceAll(s, " ", "%20")
 }
 
-// loadPopularity loads popularity data and vertex names
-func loadPopularity(filePath string) (map[string]int, map[string]struct{}) {
-	popularityMap := make(map[string]int)
-	allVertices := make(map[string]struct{})
+func loadPopularity(filePath string) map[string]int {
+	popularityMap := make(map[string]int, 1024) // give a starting capacity if known
 
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -237,218 +186,308 @@ func loadPopularity(filePath string) (map[string]int, map[string]struct{}) {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			log.Printf("Skipping invalid line in popularity file: %s", line)
+		line := scanner.Bytes()
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 
-		name := strings.Trim(parts[0], `"`)
-		popularity, err := strconv.Atoi(parts[1])
-		if err != nil {
-			log.Printf("Skipping line due to invalid popularity value: %s", line)
+		// Find the comma
+		commaIndex := bytes.IndexByte(line, ',')
+		if commaIndex < 0 {
+			// No comma found, skip line
 			continue
 		}
-		popularityMap[name] = popularity
-		allVertices[name] = struct{}{}
+
+		// name and popularity as slices
+		nameBytes := line[:commaIndex]
+		popBytes := line[commaIndex+1:]
+
+		// Trim quotes and whitespace on name if present
+		nameBytes = bytes.Trim(nameBytes, `" `)
+
+		// Convert popularity to int
+		popStr := string(popBytes) // strconv.Atoi requires a string
+		popularity, err := strconv.Atoi(popStr)
+		if err != nil {
+			// Invalid popularity value, skip line
+			continue
+		}
+
+		// Insert into map
+		popularityMap[string(nameBytes)] = popularity
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("Error reading popularity file: %v", err)
 	}
 
-	return popularityMap, allVertices
+	return popularityMap
 }
 
-// loadEdges loads edges and returns vertex names and edge pairs
-func loadEdges(filePath string) (map[string]struct{}, [][2]string) {
+func loadAllEdges(filePath string) [][2]string {
 	file, err := os.Open(filePath)
 	if err != nil {
 		log.Fatalf("Failed to open edges file: %v", err)
 	}
 	defer file.Close()
 
-	allVertices := make(map[string]struct{})
-	edgePairs := make([][2]string, 0, 10000)
-
+	var edges [][2]string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			log.Printf("Skipping invalid line in edges file: %s", line)
+		line := scanner.Bytes()
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 
-		from := strings.Trim(parts[0], `"`)
-		to := strings.Trim(parts[1], `"`)
+		// Check if line matches pattern: "field1","field2"
+		// Steps:
+		// 1. Must start with "
+		if len(line) < 6 || line[0] != '"' {
+			// Too short or doesn't start with quote
+			continue
+		}
 
-		allVertices[from] = struct{}{}
-		allVertices[to] = struct{}{}
-		edgePairs = append(edgePairs, [2]string{from, to})
+		// Find closing quote for field1
+		firstQuoteEnd := bytes.IndexByte(line[1:], '"')
+		if firstQuoteEnd == -1 {
+			// No closing quote for first field
+			continue
+		}
+		firstQuoteEnd += 1 // Adjust because we started from line[1:]
+		// Now line[firstQuoteEnd] == '"'
+
+		// After first field's ending quote, we must see: ,"
+		// So next two chars should be ',' and '"'
+		if firstQuoteEnd+2 >= len(line) {
+			// Not enough length for ',' and '"'
+			continue
+		}
+		if line[firstQuoteEnd+1] != ',' || line[firstQuoteEnd+2] != '"' {
+			// Not in the format "field1","field2"
+			continue
+		}
+
+		// Find closing quote for field2
+		secondFieldStart := firstQuoteEnd + 3 // position after ,"
+		secondQuoteEnd := bytes.IndexByte(line[secondFieldStart:], '"')
+		if secondQuoteEnd == -1 {
+			// no ending quote for second field
+			continue
+		}
+		secondQuoteEnd += secondFieldStart
+		// Now line[secondQuoteEnd] == '"'
+
+		// Check if there's no extra characters after second quote
+		if secondQuoteEnd != len(line)-1 {
+			// Extra chars after second field's quote
+			continue
+		}
+
+		// Extract fields without quotes
+		fromBytes := line[1:firstQuoteEnd]               // between first pair of quotes
+		toBytes := line[secondFieldStart:secondQuoteEnd] // between second pair of quotes
+
+		// Convert to string
+		fromStr := string(fromBytes)
+		toStr := string(toBytes)
+
+		edges = append(edges, [2]string{fromStr, toStr})
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("Error reading edges file: %v", err)
 	}
 
-	return allVertices, edgePairs
+	return edges
 }
 
-// insertAllVertices inserts all vertices using batch operations
-func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string]int) error {
-	operations := make([]BatchOperation, 0, batchSize)
+// buildBatchScript creates a script with:
+// - CREATE VERTEX statements for any new vertices not in vertexRIDMap
+// - CREATE EDGE statements for the batch of edges
+// - A RETURN statement to get the newly created vertices
+func buildBatchScript(edges [][2]string, vertexRIDMap map[string]string, popularityMap map[string]int) ([]string, []string) {
+	scriptCommands := []string{}
+	vertexVarMap := make(map[string]string) // name -> varName for this batch
+	var newVertices []string
+	vertexCount := 0
 
-	for name := range allVertices {
-		pop := 0
-		if p, ok := popularityMap[name]; ok {
-			pop = p
-		}
-		op := BatchOperation{
-			Type: "c",
-			Record: map[string]interface{}{
-				"@class":     "V",
-				"name":       name,
-				"popularity": pop,
-			},
-		}
-		operations = append(operations, op)
-		if len(operations) == batchSize {
-			if err := sendBatchRequest(operations, true); err != nil {
-				return err
+	// Create vertices that are not known
+	for _, e := range edges {
+		for _, vertexName := range e {
+			// Already known globally?
+			if _, known := vertexRIDMap[vertexName]; known {
+				continue
 			}
-			operations = operations[:0]
+			// Already scheduled this batch?
+			if _, inBatch := vertexVarMap[vertexName]; inBatch {
+				continue
+			}
+
+			safeName, ok := sanitizeName(vertexName)
+			if !ok || safeName == "" {
+				// Can't safely use this name in SQL, skip this vertex
+				continue
+			}
+
+			varName := fmt.Sprintf("$v_%d", vertexCount)
+			vertexCount++
+
+			if pop, ok := popularityMap[vertexName]; ok {
+				scriptCommands = append(scriptCommands,
+					fmt.Sprintf("LET %s = CREATE VERTEX V SET name = \"%s\", popularity = %d", varName[1:], safeName, pop))
+			} else {
+				scriptCommands = append(scriptCommands,
+					fmt.Sprintf("LET %s = CREATE VERTEX V SET name = \"%s\"", varName[1:], safeName))
+			}
+
+			vertexVarMap[vertexName] = varName
+			newVertices = append(newVertices, vertexName)
 		}
 	}
 
-	if len(operations) > 0 {
-		return sendBatchRequest(operations, true)
-	}
+	// Create edges
+	for _, e := range edges {
+		from := e[0]
+		to := e[1]
 
-	return nil
-}
-
-func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error {
-	operations := make([]BatchOperation, 0, batchSize)
-
-	for _, pair := range edgePairs {
-		fromName := pair[0]
-		toName := pair[1]
-
-		fromRID, okFrom := vertexRIDMap[fromName]
-		if !okFrom {
-			// This should not happen if we created all vertices first
-			log.Printf("Warning: from vertex not found: %s", fromName)
+		// If we couldn't create or recognize either vertex, skip this edge
+		fromRef, fromOk := getVertexReference(from, vertexRIDMap, vertexVarMap)
+		toRef, toOk := getVertexReference(to, vertexRIDMap, vertexVarMap)
+		if !fromOk || !toOk {
+			// At least one vertex is unavailable, skip this edge
 			continue
 		}
 
-		toRID, okTo := vertexRIDMap[toName]
-		if !okTo {
-			// This should not happen if we created all vertices first
-			log.Printf("Warning: to vertex not found: %s", toName)
-			continue
-		}
+		scriptCommands = append(scriptCommands, fmt.Sprintf("CREATE EDGE E FROM %s TO %s", fromRef, toRef))
+	}
 
-		// Create the edge
-		op := BatchOperation{
-			Type: "c",
-			Record: map[string]interface{}{
-				"@class": "E",
-				"out":    fromRID,
-				"in":     toRID,
+	// Return newly created vertices as a JSON array of objects
+	if len(newVertices) > 0 {
+		var objectList []string
+		for i := 0; i < vertexCount; i++ {
+			objectList = append(objectList, fmt.Sprintf(`{"name": $v_%d.name, "@rid": $v_%d.@rid}`, i, i))
+		}
+		returnCmd := "RETURN [" + strings.Join(objectList, ",") + "]"
+		scriptCommands = append(scriptCommands, returnCmd)
+	} else {
+		scriptCommands = append(scriptCommands, "RETURN []")
+	}
+
+	return scriptCommands, newVertices
+}
+
+// sanitizeName attempts to safely include a name in an SQL string by using single quotes and escaping internal single quotes.
+// Returns the sanitized name and a boolean indicating success.
+func sanitizeName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+
+	// Replace single quotes with doubled single quotes for SQL escaping.
+	name = strings.ReplaceAll(name, "'", "''")
+
+	// Additional checks can be made if needed, for example:
+	// If name contains control characters or unprintable chars, skip.
+	// For now, we assume this is sufficient.
+
+	return name, true
+}
+
+// getVertexReference returns the reference (RID or variable) for a given vertex name.
+// If the vertex is known globally (vertexRIDMap), return the RID.
+// If it's in the current batch (vertexVarMap), return the variable.
+// If not found, return false.
+func getVertexReference(vertexName string, vertexRIDMap map[string]string, vertexVarMap map[string]string) (string, bool) {
+	if rid, known := vertexRIDMap[vertexName]; known {
+		return rid, true
+	}
+	if varName, inBatch := vertexVarMap[vertexName]; inBatch {
+		return varName, true
+	}
+	return "", false
+}
+
+// sendScriptBatch sends a script request with transaction=false
+// Parses the returned JSON to extract newly created vertices RIDs
+func sendScriptBatch(scriptCommands []string) (map[string]string, error) {
+	batch := map[string]interface{}{
+		"transaction": false,
+		"operations": []map[string]interface{}{
+			{
+				"type":     "script",
+				"language": "sql",
+				"script":   scriptCommands,
 			},
-		}
-		operations = append(operations, op)
-
-		if len(operations) >= batchSize {
-			if err := sendBatchRequest(operations, true); err != nil {
-				return err
-			}
-			operations = operations[:0]
-		}
+		},
 	}
 
-	if len(operations) > 0 {
-		return sendBatchRequest(operations, true)
-	}
-
-	return nil
-}
-
-// fetchAllVertexRIDs fetches all vertices with their RIDs
-func fetchAllVertexRIDs() (map[string]string, error) {
-	url := fmt.Sprintf("%s/query/%s/sql/SELECT name,@rid FROM V LIMIT -1", orientDBBaseURL, databaseName)
-	req, err := http.NewRequest("GET", url, nil)
+	jsonData, err := json.Marshal(batch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.SetBasicAuth(orientDBUsername, orientDBPassword)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to query vertices: status %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Result []struct {
-			Name string `json:"name"`
-			Rid  string `json:"@rid"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	m := make(map[string]string, len(result.Result))
-	for _, r := range result.Result {
-		m[r.Name] = r.Rid
-	}
-
-	return m, nil
-}
-
-// sendBatchRequest sends a batch of operations to the OrientDB REST API
-func sendBatchRequest(operations []BatchOperation, transaction bool) error {
-	request := BatchRequest{
-		Transaction: transaction,
-		Operations:  operations,
-	}
-	jsonData, err := json.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("failed to marshal batch request: %w", err)
+		return nil, fmt.Errorf("failed to marshal batch request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/batch/%s", orientDBBaseURL, databaseName)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to create batch request: %w", err)
+		return nil, fmt.Errorf("failed to create batch request: %w", err)
 	}
+
 	req.SetBasicAuth(orientDBUsername, orientDBPassword)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send batch: %w", err)
+		return nil, fmt.Errorf("failed to send batch: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("batch insert failed with status: %d, body: %s", resp.StatusCode, string(body))
+	// Log the raw response body for debugging
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Raw response body: %s, %s", string(body), batch)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return nil
+	var result struct {
+		Result []interface{} `json:"result"`
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("batch script execution failed with status: %d, body: %s, batch: %s", resp.StatusCode, string(body), batch)
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// The result should contain the return value from our RETURN command as the last command.
+	// We expected it to be an array of vertices. Each vertex is a record with @rid.
+	newVerticesMap := make(map[string]string)
+	if len(result.Result) > 0 {
+		// result.Result[0] should be what we returned (the array of new vertices)
+		vertices, ok := result.Result[0].([]interface{})
+		if !ok {
+			// Could be empty or not what we expect
+			return newVerticesMap, nil
+		}
+		// Each element should be a map with @rid and name
+		for _, v := range vertices {
+			rec, ok := v.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// Extract @rid and name
+			rid, _ := rec["@rid"].(string)
+			name, _ := rec["name"].(string)
+			if rid != "" && name != "" {
+				newVerticesMap[name] = rid
+			}
+		}
+	}
+
+	return newVerticesMap, nil
 }
