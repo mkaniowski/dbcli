@@ -4,7 +4,7 @@
     <parameters>
         <!-- Memory and Disk Cache -->
         <!-- Increase this to match available container memory. E.g., for a container with 8GB RAM, try 4096 or more -->
-        <entry name="storage.diskCache.bufferSize" value="6144"/>
+        <entry name="storage.diskCache.bufferSize" value="4096"/>
 
         <!-- Set this to improve performance by disabling the WAL, trading off durability -->
         <entry name="storage.useWAL" value="false"/>
@@ -26,6 +26,16 @@
 
         <!-- Reduce command timeout -->
         <entry name="command.timeout" value="0"/>
+
+
+        <entry value="true" name="environment.concurrent"/>
+        <entry value="false" name="memory.directMemory.safeMode"/>
+        <entry value="1024" name="storage.openFiles.limit"/>
+        <entry value="false" name="tx.useLog"/>
+        <entry value="65536" name="network.socketBufferSize"/>
+        <entry value="16384" name="network.binary.maxLength"/>
+        <entry value="2000000" name="network.http.maxLength"/>
+        <entry value="true" name="query.parallelAuto"/>
     </parameters>
 
     <!-- Handlers: Keep only what you need -->
@@ -64,6 +74,10 @@
         <entry name="network.binary.writeTimeout" value="0"/>
         <entry name="network.http.readTimeout" value="0"/>
         <entry name="network.http.writeTimeout" value="0"/>
+
+        <entry value="65536" name="network.socketBufferSize"/>
+        <entry value="16384" name="network.binary.maxLength"/>
+        <entry value="2000000" name="network.http.maxLength"/>
     </network>
 
     <!-- Users: minimal configuration -->
@@ -92,5 +106,53 @@
         <!-- Set logging to error only -->
         <entry name="log.console.level" value="fine"/>
         <entry name="log.file.level" value="fine"/>
+
+
+        <!-- Memory and Disk Cache -->
+        <!-- Increase this to match available container memory. E.g., for a container with 8GB RAM, try 4096 or more -->
+        <entry name="storage.diskCache.bufferSize" value="4096"/>
+
+        <!-- Set this to improve performance by disabling the WAL, trading off durability -->
+        <entry name="storage.useWAL" value="false"/>
+        <entry name="storage.wal.syncOnPageFlush" value="false"/>
+        <!-- If you must use WAL for some durability, consider smaller segments and asynchronous syncs -->
+        <!--<entry name="storage.wal.autoRestore" value="false"/>-->
+        <!--<entry name="storage.wal.maxSize" value="1024"/>-->
+
+        <!-- Increase internal thread pools for parallel operations -->
+        <entry name="server.channel.minPool" value="100"/>
+        <entry name="server.channel.maxPool" value="1000"/>
+
+        <!-- Reduce sync operations on journaling -->
+        <entry name="storage.makeFullCheckPointAfterCreate" value="false"/>
+        <entry name="storage.checkpointLockTimeout" value="15000"/> <!-- Reduced timeouts -->
+
+        <!-- Disable security-related overhead if it's acceptable -->
+        <entry name="security.userPasswordSaltIterations" value="1"/>
+
+        <!-- Reduce command timeout -->
+        <entry name="command.timeout" value="0"/>
+
+
+        <entry value="true" name="environment.concurrent"/>
+        <entry value="false" name="memory.directMemory.safeMode"/>
+        <entry value="1024" name="storage.openFiles.limit"/>
+        <entry value="false" name="tx.useLog"/>
+        <entry value="65536" name="network.socketBufferSize"/>
+        <entry value="16384" name="network.binary.maxLength"/>
+        <entry value="2000000" name="network.http.maxLength"/>
+        <entry value="true" name="query.parallelAuto"/>
+
+        <!-- Increase network pools and reduce timeouts -->
+        <entry name="network.binary.readTimeout" value="0"/>
+        <entry name="network.binary.writeTimeout" value="0"/>
+        <entry name="network.http.readTimeout" value="0"/>
+        <entry name="network.http.writeTimeout" value="0"/>
+
+        <entry value="65536" name="network.socketBufferSize"/>
+        <entry value="32768" name="network.binary.maxLength"/>
+        <entry value="2000000" name="network.http.maxLength"/>
+        <entry value="false" name="file.lock"/>
+        <entry value="false" name="db.validation"/>
     </properties>
 </orient-server>

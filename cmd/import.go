@@ -1,17 +1,16 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
+	"dbcli/importer"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,7 +21,8 @@ const (
 	orientDBUsername = "root"
 	orientDBPassword = "rootpwd"
 	databaseName     = "dbcli"
-	batchSize        = 7400 // Number of records per batch
+	batchSize        = 20000 // Number of records per batch
+	workers          = 6     // Number of workers for parallel processing
 )
 
 // BatchOperation represents an operation in the batch request
@@ -43,12 +43,7 @@ type BatchRequest struct {
 var importCmd = &cobra.Command{
 	Use:   "import [data directory]",
 	Short: "Import data from popularity and taxonomy files into OrientDB",
-	Long: `Import vertices and edges from the given data directory into OrientDB.
-The directory should contain:
-- popularity_iw.csv
-- taxonomy_iw.csv
-`,
-	Args: cobra.ExactArgs(1),
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := args[0]
 
@@ -57,7 +52,7 @@ The directory should contain:
 			log.Fatalf("Failed to ensure database existence: %v", err)
 		}
 
-		// Create schema outside of a transaction
+		// Create schema
 		if err := createSchema(); err != nil {
 			log.Fatalf("Failed to create schema: %v", err)
 		}
@@ -66,26 +61,20 @@ The directory should contain:
 		startLoadPopularity := time.Now()
 
 		// Load popularity data
-		popularityMap, popularityVertices := loadPopularity(filepath.Join(dataDir, "popularity_iw.csv"))
+		popularityMap, popularityVertices := importer.LoadPopularity(filepath.Join(dataDir, "popularity_iw.csv"))
 
 		elapsedLoadPopularity := time.Since(startLoadPopularity)
 		startLoadTaxonomy := time.Now()
 
 		// Load taxonomy edges and gather vertices
-		taxonomyVertices, edgePairs := loadEdges(filepath.Join(dataDir, "taxonomy_iw.csv"))
+		taxonomyVertices, edgePairs := importer.LoadEdges(filepath.Join(dataDir, "taxonomy_iw.csv"))
 
 		elapsedLoadTaxonomy := time.Since(startLoadTaxonomy)
 
 		startMerge := time.Now()
 
-		// Merge all vertices: from popularity and taxonomy
-		allVertices := make(map[string]struct{})
-		for v := range popularityVertices {
-			allVertices[v] = struct{}{}
-		}
-		for v := range taxonomyVertices {
-			allVertices[v] = struct{}{}
-		}
+		// Merge vertices
+		allVertices := mergeVertices(popularityVertices, taxonomyVertices)
 
 		elapsedMerge := time.Since(startMerge)
 
@@ -134,7 +123,6 @@ func init() {
 	rootCmd.AddCommand(importCmd)
 }
 
-// ensureDatabaseExists checks if the database exists and creates it if not
 func ensureDatabaseExists() error {
 	dbCheckURL := fmt.Sprintf("%s/database/%s", orientDBBaseURL, databaseName)
 
@@ -155,7 +143,6 @@ func ensureDatabaseExists() error {
 		return nil
 	}
 
-	// Create the database if it doesn't exist
 	dbCreateURL := fmt.Sprintf("%s/database/%s/plocal", orientDBBaseURL, databaseName)
 	req, err = http.NewRequest("POST", dbCreateURL, nil)
 	if err != nil {
@@ -179,19 +166,17 @@ func ensureDatabaseExists() error {
 }
 
 func createSchema() error {
-	// The class V and E are system classes and already exist.
-	// Just ensure the property and index are created.
 	if err := runSQLCommand("CREATE PROPERTY V.name STRING"); err != nil {
-		// Ignore if property already exists
 		log.Printf("Warning: could not create property V.name: %v", err)
 	}
-
 	if err := runSQLCommand("CREATE INDEX V.name UNIQUE"); err != nil {
-		// Ignore if index already exists
 		log.Printf("Warning: could not create index on V.name: %v", err)
 	}
-
 	return nil
+}
+
+func urlEncode(s string) string {
+	return strings.ReplaceAll(s, " ", "%20")
 }
 
 func runSQLCommand(command string) error {
@@ -202,7 +187,6 @@ func runSQLCommand(command string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create command request: %w", err)
 	}
-
 	req.SetBasicAuth(orientDBUsername, orientDBPassword)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -216,167 +200,153 @@ func runSQLCommand(command string) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("command failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
 
-func urlEncode(s string) string {
-	return strings.ReplaceAll(s, " ", "%20")
-}
-
-// loadPopularity loads popularity data and vertex names
-func loadPopularity(filePath string) (map[string]int, map[string]struct{}) {
-	popularityMap := make(map[string]int)
-	allVertices := make(map[string]struct{})
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Fatalf("Failed to open popularity file: %v", err)
+func mergeVertices(vertices1, vertices2 map[string]struct{}) map[string]struct{} {
+	merged := make(map[string]struct{})
+	for k := range vertices1 {
+		merged[k] = struct{}{}
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			log.Printf("Skipping invalid line in popularity file: %s", line)
-			continue
-		}
-
-		name := strings.Trim(parts[0], `"`)
-		popularity, err := strconv.Atoi(parts[1])
-		if err != nil {
-			log.Printf("Skipping line due to invalid popularity value: %s", line)
-			continue
-		}
-		popularityMap[name] = popularity
-		allVertices[name] = struct{}{}
+	for k := range vertices2 {
+		merged[k] = struct{}{}
 	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading popularity file: %v", err)
-	}
-
-	return popularityMap, allVertices
-}
-
-// loadEdges loads edges and returns vertex names and edge pairs
-func loadEdges(filePath string) (map[string]struct{}, [][2]string) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Fatalf("Failed to open edges file: %v", err)
-	}
-	defer file.Close()
-
-	allVertices := make(map[string]struct{})
-	edgePairs := make([][2]string, 0, 10000)
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			log.Printf("Skipping invalid line in edges file: %s", line)
-			continue
-		}
-
-		from := strings.Trim(parts[0], `"`)
-		to := strings.Trim(parts[1], `"`)
-
-		allVertices[from] = struct{}{}
-		allVertices[to] = struct{}{}
-		edgePairs = append(edgePairs, [2]string{from, to})
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading edges file: %v", err)
-	}
-
-	return allVertices, edgePairs
+	return merged
 }
 
 // insertAllVertices inserts all vertices using batch operations
 func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string]int) error {
-	operations := make([]BatchOperation, 0, batchSize)
+	vertexChan := make(chan map[string]interface{})
+	errChan := make(chan error, workers)
+	var wg sync.WaitGroup
 
-	for name := range allVertices {
-		pop := 0
-		if p, ok := popularityMap[name]; ok {
-			pop = p
-		}
-		op := BatchOperation{
-			Type: "c",
-			Record: map[string]interface{}{
-				"@class":     "V",
-				"name":       name,
-				"popularity": pop,
-			},
-		}
-		operations = append(operations, op)
-		if len(operations) == batchSize {
-			if err := sendBatchRequest(operations, true); err != nil {
-				return err
+	// Worker pool
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			batch := make([]BatchOperation, 0, batchSize)
+			for vertex := range vertexChan {
+				batch = append(batch, BatchOperation{
+					Type: "c",
+					Record: map[string]interface{}{
+						"@class":     "V",
+						"name":       vertex["name"],
+						"popularity": vertex["popularity"],
+					},
+				})
+				if len(batch) >= batchSize {
+					if err := sendBatchRequest(batch, true); err != nil {
+						errChan <- err
+						return
+					}
+					batch = batch[:0]
+				}
 			}
-			operations = operations[:0]
+			if len(batch) > 0 {
+				errChan <- sendBatchRequest(batch, true)
+			}
+		}()
+	}
+
+	// Feed data to workers
+	go func() {
+		for name := range allVertices {
+			popularity := 0
+			if p, ok := popularityMap[name]; ok {
+				popularity = p
+			}
+			vertexChan <- map[string]interface{}{"name": name, "popularity": popularity}
+		}
+		close(vertexChan)
+	}()
+
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors
+	for err := range errChan {
+		if err != nil {
+			return err
 		}
 	}
-
-	if len(operations) > 0 {
-		return sendBatchRequest(operations, true)
-	}
-
 	return nil
+
 }
 
 func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error {
-	operations := make([]BatchOperation, 0, batchSize)
+	edgeChan := make(chan []BatchOperation, 10) // Buffered channel to hold edge batches
+	errorChan := make(chan error, 1)            // Channel to capture errors
+	doneChan := make(chan struct{})             // Channel to signal completion of processing
 
-	for _, pair := range edgePairs {
-		fromName := pair[0]
-		toName := pair[1]
-
-		fromRID, okFrom := vertexRIDMap[fromName]
-		if !okFrom {
-			// This should not happen if we created all vertices first
-			log.Printf("Warning: from vertex not found: %s", fromName)
-			continue
-		}
-
-		toRID, okTo := vertexRIDMap[toName]
-		if !okTo {
-			// This should not happen if we created all vertices first
-			log.Printf("Warning: to vertex not found: %s", toName)
-			continue
-		}
-
-		// Create the edge
-		op := BatchOperation{
-			Type: "c",
-			Record: map[string]interface{}{
-				"@class": "E",
-				"out":    fromRID,
-				"in":     toRID,
-			},
-		}
-		operations = append(operations, op)
-
-		if len(operations) >= batchSize {
-			if err := sendBatchRequest(operations, true); err != nil {
-				return err
+	// Worker function to process edge batches
+	worker := func() {
+		for batch := range edgeChan {
+			if err := sendBatchRequest(batch, true); err != nil {
+				errorChan <- err
+				return
 			}
-			operations = operations[:0]
 		}
+		doneChan <- struct{}{}
 	}
 
-	if len(operations) > 0 {
-		return sendBatchRequest(operations, true)
+	// Launch worker goroutines
+	numWorkers := workers // Number of workers to process batches concurrently
+	for i := 0; i < numWorkers; i++ {
+		go worker()
+	}
+
+	// Prepare edge batches and send them to the channel
+	go func() {
+		operations := make([]BatchOperation, 0, batchSize)
+		for _, pair := range edgePairs {
+			fromName, toName := pair[0], pair[1]
+
+			fromRID, okFrom := vertexRIDMap[fromName]
+			if !okFrom {
+				log.Printf("Warning: from vertex not found: %s", fromName)
+				continue
+			}
+
+			toRID, okTo := vertexRIDMap[toName]
+			if !okTo {
+				log.Printf("Warning: to vertex not found: %s", toName)
+				continue
+			}
+
+			op := BatchOperation{
+				Type: "c",
+				Record: map[string]interface{}{
+					"@class": "E",
+					"out":    fromRID,
+					"in":     toRID,
+				},
+			}
+			operations = append(operations, op)
+
+			if len(operations) == batchSize {
+				edgeChan <- operations // Send batch to channel
+				operations = make([]BatchOperation, 0, batchSize)
+			}
+		}
+
+		// Send any remaining operations
+		if len(operations) > 0 {
+			edgeChan <- operations
+		}
+
+		close(edgeChan) // Close the channel to signal no more batches
+	}()
+
+	// Wait for all workers to complete or an error to occur
+	for i := 0; i < numWorkers; i++ {
+		select {
+		case <-doneChan:
+			// Worker finished successfully
+		case err := <-errorChan:
+			// An error occurred
+			return err
+		}
 	}
 
 	return nil
