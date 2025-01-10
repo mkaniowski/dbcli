@@ -7,8 +7,8 @@ services:
     restart: unless-stopped
     command: server.sh -Ddistributed=false -Dstorage.useWAL=false -XX:+PerfDisableSharedMem -Dstorage.wal.syncOnPageFlush=false -Dtx.useLog=false -XX:MaxDirectMemorySize=8192M -Dstorage.diskCache.bufferSize=8192
     ports:
-      - "2424:2424"
-      - "2480:2480"
+      - "127.0.0.1:2424:2424"
+      - "127.0.0.1:2480:2480"
     environment:
       ORIENTDB_ROOT_PASSWORD: rootpwd
       ORIENTDB_USERNAME: admin

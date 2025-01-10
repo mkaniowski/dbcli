@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	orientDBBaseURL  = "http://localhost:2480" // Replace with your OrientDB REST endpoint
+	orientDBBaseURL  = "http://127.0.0.1:2480" // Replace with your OrientDB REST endpoint
 	orientDBUsername = "root"
 	orientDBPassword = "rootpwd"
 	databaseName     = "dbcli"
 	batchSize        = 20000 // Number of records per batch
-	workers          = 6     // Number of workers for parallel processing
+	workers          = 1     // Number of workers for parallel processing
 )
 
 // BatchOperation represents an operation in the batch request
@@ -282,7 +282,7 @@ func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error
 	// Worker function to process edge batches
 	worker := func() {
 		for batch := range edgeChan {
-			if err := sendBatchRequest(batch, true); err != nil {
+			if err := sendBatchRequest(batch, false); err != nil {
 				errorChan <- err
 				return
 			}
@@ -315,12 +315,9 @@ func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error
 			}
 
 			op := BatchOperation{
-				Type: "c",
-				Record: map[string]interface{}{
-					"@class": "E",
-					"out":    fromRID,
-					"in":     toRID,
-				},
+				Type:     "cmd",
+				Language: "sql",
+				Command:  "BEGIN;CREATE EDGE E FROM " + fromRID + " TO " + toRID + ";COMMIT;",
 			}
 			operations = append(operations, op)
 
