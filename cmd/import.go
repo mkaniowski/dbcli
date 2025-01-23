@@ -22,8 +22,8 @@ const (
 	orientDBPassword = "rootpwd"
 	databaseName     = "dbcli"
 
-	batchSize = 10000
-	workers   = 1
+	batchSize = 20000
+	workers   = 6
 )
 
 // BatchOperation represents an operation in the batch request
@@ -364,11 +364,11 @@ func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string
 	errChan := make(chan error, workers)
 	var wg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
+	for i := 0; i < 1; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			batch := make([]BatchOperation, 0, batchSize)
+			batch := make([]BatchOperation, 0, 10000)
 			for vertex := range vertexChan {
 				batch = append(batch, BatchOperation{
 					Type: "c",
@@ -379,7 +379,7 @@ func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string
 					},
 				})
 				// When we hit batchSize, send a batch request
-				if len(batch) >= batchSize {
+				if len(batch) >= 10000 {
 					if err := sendBatchRequest(batch, true); err != nil {
 						errChan <- err
 						return
