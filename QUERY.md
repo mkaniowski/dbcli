@@ -15,15 +15,18 @@
     SELECT expand(both()) FROM (
     TRAVERSE out() FROM (SELECT FROM V WHERE name = '2005_in_Oceanian_association_football_leagues')
     WHILE $depth <= 6 AND @rid != (SELECT @rid FROM V WHERE name = 'Christianity_in_Bolivia')
-    ) ````
+    )
+    ```
 
-15. ``` SELECT count(*) FROM (
+15. ```
+    SELECT count(*) FROM (
     TRAVERSE out() FROM (SELECT FROM V WHERE name = '2005_in_Oceanian_association_football_leagues')
     WHILE $depth <= 6 AND @rid != (SELECT @rid FROM V WHERE name = 'Christianity_in_Bolivia')
     ) 
     ```
 
-16. ``` SELECT sum(popularity) FROM (
+16. ```
+    SELECT sum(popularity) FROM (
     TRAVERSE both() FROM (SELECT FROM V WHERE name = '2005_in_Oceanian_association_football_leagues')
     WHILE $depth <= 6
     )
