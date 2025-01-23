@@ -364,11 +364,11 @@ func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string
 	errChan := make(chan error, workers)
 	var wg sync.WaitGroup
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			batch := make([]BatchOperation, 0, 10000)
+			batch := make([]BatchOperation, 0, batchSize)
 			for vertex := range vertexChan {
 				batch = append(batch, BatchOperation{
 					Type: "c",
@@ -379,7 +379,7 @@ func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string
 					},
 				})
 				// When we hit batchSize, send a batch request
-				if len(batch) >= 10000 {
+				if len(batch) >= batchSize {
 					if err := sendBatchRequest(batch, true); err != nil {
 						errChan <- err
 						return
@@ -427,10 +427,10 @@ func insertAllVertices(allVertices map[string]struct{}, popularityMap map[string
 // with up to 20,000 CREATE EDGE commands in a single BEGIN/COMMIT script block.
 func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error {
 	edgeChan := make(chan [2]string)
-	errChan := make(chan error, workers)
+	errChan := make(chan error, 1)
 	var wg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
+	for i := 0; i < 1; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -451,7 +451,7 @@ func insertAllEdges(edgePairs [][2]string, vertexRIDMap map[string]string) error
 				count++
 
 				// If we've reached batchSize, send the script as a single operation
-				if count >= batchSize {
+				if count >= 10000 {
 					scriptLines = append(scriptLines, "COMMIT;")
 					op := BatchOperation{
 						Type:     "script",
