@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+
   orientdb:
     image: orientdb:latest
     restart: unless-stopped
@@ -27,6 +28,13 @@ services:
       - orientdb_config:/orientdb/config
     networks:
       - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+        reservations:
+          cpus: '8'
+          memory: 16G
 
   app:
     build:
