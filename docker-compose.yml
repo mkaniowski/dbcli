@@ -3,24 +3,70 @@ version: '3.8'
 services:
   orientdb:
     image: orientdb:latest
-    container_name: dbcli
     restart: unless-stopped
-    command: server.sh -Ddistributed=false -Dstorage.useWAL=false -XX:+PerfDisableSharedMem -Dstorage.wal.syncOnPageFlush=false -Dtx.useLog=false -XX:MaxDirectMemorySize=8192M -Dstorage.diskCache.bufferSize=8192
+    command: >
+      server.sh 
+      -Ddistributed=false 
+      -Dstorage.useWAL=false 
+      -XX:+PerfDisableSharedMem 
+      -Dstorage.wal.syncOnPageFlush=false 
+      -Dtx.useLog=false 
+      -XX:MaxDirectMemorySize=8192M 
+      -Dstorage.diskCache.bufferSize=8192
     ports:
       - "2424:2424"
-      - "2480:2480"
+      - "127.0.0.1:2480:2480"
     environment:
       ORIENTDB_ROOT_PASSWORD: rootpwd
       ORIENTDB_USERNAME: admin
-      ORIENTDB_PASSWORD: adminpwd
+      ORIENTDB_PASSWORD: rootpwd
       ORIENTDB_DATABASE: dbcli
       ORIENTDB_OPTS_MEMORY: "-Xms1G -Xmx10G"
     volumes:
-      - ./orientdb_data:/orientdb/databases
-      - ./orientdb_config:/orientdb/config
+      - orientdb_data:/orientdb/databases
+      - orientdb_config:/orientdb/config
+    networks:
+      - app-network
+
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: adv-db-systems.app:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: orientdb
+      DB_PORT: 2424
+      ORIENTDB_ROOT_PASSWORD: rootpwd
+    networks:
+      - app-network
+
+  importer:
+    build:
+      context: ./importer
+      dockerfile: Dockerfile  # Ensure you have a Dockerfile in ./importer
+    image: adv-db-systems.importer:latest
+    restart: unless-stopped
+    depends_on:
+      - orientdb
+    environment:
+      DB_HOST: orientdb
+      DB_PORT: 2424
+      ORIENTDB_ROOT_PASSWORD: rootpwd
+      # Add other environment variables as needed
+    volumes:
+      - ./data:/usr/src/app/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   orientdb_data:
     driver: local
   orientdb_config:
+    driver: local
+  importer_data:
     driver: local
