@@ -22,7 +22,7 @@ const (
 	orientDBPassword = "rootpwd"
 	databaseName     = "dbcli"
 
-	batchSize = 20000
+	batchSize = 10000
 	workers   = 1
 )
 
@@ -197,7 +197,7 @@ func ensureDatabaseExists() error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create database, status: %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -299,7 +299,7 @@ func createProperties(className string, props map[string]map[string]string) erro
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create properties for class %s, status: %d, body: %s",
 			className, resp.StatusCode, string(body))
