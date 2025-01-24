@@ -113,17 +113,16 @@ var taskCmd = &cobra.Command{
 
 		case "14":
 			// 3 arguments: [14 sourceName targetName depth]
-			if len(args) < 4 {
+			if len(args) < 3 {
 				log.Fatal("Task14 requires [sourceName targetName depth]")
 			}
 			sourceName := args[1]
-			targetName := args[2]
-			depthStr := args[3]
+			depthStr := args[2]
 			depth, parseErr := strconv.Atoi(depthStr)
 			if parseErr != nil {
 				log.Fatalf("depth must be an integer: %v", parseErr)
 			}
-			result, err = task14(sourceName, targetName, depth)
+			result, err = task14(sourceName, depth)
 
 		case "15":
 			// 3 arguments: [15 sourceName targetName depth]
@@ -173,17 +172,12 @@ var taskCmd = &cobra.Command{
 
 		case "18":
 			// Expecting 2 arguments: [18 sourceName targetName]
-			if len(args) < 4 {
+			if len(args) < 3 {
 				log.Fatal("Task18 requires [sourceName targetName depth]")
 			}
 			sourceName := args[1]
 			targetName := args[2]
-			depthStr := args[3]
-			depth, parseErr := strconv.Atoi(depthStr)
-			if parseErr != nil {
-				log.Fatalf("depth must be an integer: %v", parseErr)
-			}
-			result, err = task18(sourceName, targetName, depth)
+			result, err = task18(sourceName, targetName)
 			// Note: If you want to add depth to Task18 as well, follow similar steps
 
 		default:
@@ -282,10 +276,10 @@ func task13(name string, popularity int) (utils.ResultSet, error) {
 }
 
 // 14. finds all paths (up to depth) from sourceName to anything except targetName
-func task14(sourceName, targetName string, depth int) (utils.ResultSet, error) {
+func task14(sourceName string, depth int) (utils.ResultSet, error) {
 	query := fmt.Sprintf(
-		"SELECT expand(both()) FROM (TRAVERSE out() FROM (SELECT FROM `Vertex` WHERE name = \"%s\") WHILE $depth <= %d AND @rid != (SELECT @rid FROM `Vertex` WHERE name = \"%s\"))",
-		sourceName, depth, targetName)
+		"TRAVERSE out() FROM (SELECT FROM `Vertex` WHERE name = \"%s\") WHILE $depth <= %d",
+		sourceName, depth)
 	return utils.ExecuteQuery(query)
 }
 
@@ -314,24 +308,9 @@ func task17(sourceName, targetName string, depth int) (utils.ResultSet, error) {
 }
 
 // 18. finds the directed path with the greatest total popularity between two given nodes (sourceName -> targetName)
-func task18(sourceName, targetName string, depth int) (utils.ResultSet, error) {
-	/*
-	   Explanation:
-
-	   1) We call allSimplePaths() from the 'sourceName' to the 'targetName'
-	      with direction "OUT" so that we only follow outgoing edges.
-
-	   2) UNWIND each path (so we can sum popularity).
-
-	   3) For each path, compute sum_popularity = sum of all node popularities in it.
-
-	   4) ORDER BY sum_popularity DESC, pick the top path (LIMIT 1).
-
-	   5) Finally, expand that top path so you see the actual node records in the result.
-	*/
+func task18(sourceName, targetName string) (utils.ResultSet, error) {
 	query := fmt.Sprintf(
-		"SELECT expand(path) FROM (SELECT path FROM (SELECT path, (SELECT sum(popularity) FROM (SELECT expand(path))) AS sum_popularity FROM (SELECT allSimplePaths((SELECT FROM `Vertex` WHERE name = '%s'), (SELECT FROM `Vertex` WHERE name = '%s'), {maxDepth: %d, direction: 'OUT'}) AS path) UNWIND path) ORDER BY sum_popularity DESC LIMIT 1)",
-		sourceName, targetName, depth)
-
+		"SELECT expand(path) FROM (SELECT shortestPath((SELECT FROM `Vertex` WHERE name = \"%s\"), (SELECT FROM `Vertex` WHERE name = \"%s\")) AS path) ORDER BY popularity DESC UNWIND path",
+		sourceName, targetName)
 	return utils.ExecuteQuery(query)
 }
