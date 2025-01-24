@@ -73,7 +73,7 @@ app="app"
 db="orientdb"
 
 #preprocessingCommand=""
-importCommand='./dbcli import /data'
+importCommand='./dbcli import data'
 
 task10Command='./dbcli task 10'
 task16Command='./dbcli task 16 "Tourism_in_Uttarakhand" 6 6'

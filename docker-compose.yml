@@ -20,7 +20,7 @@ services:
       - "127.0.0.1:2480:2480"
     environment:
       ORIENTDB_ROOT_PASSWORD: rootpwd
-      ORIENTDB_USERNAME: admin
+      ORIENTDB_USERNAME: root
       ORIENTDB_PASSWORD: rootpwd
       ORIENTDB_DATABASE: dbcli
       ORIENTDB_OPTS_MEMORY: "-Xms1G -Xmx10G"
