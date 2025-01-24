@@ -75,10 +75,10 @@ db="orientdb"
 #preprocessingCommand=""
 importCommand='./dbcli import /data'
 
-task10Command='./dbcli task 10 10'
-task16Command='./dbcli task 16 "Tourism_in_Uttarakhand" 1'
-task17Command='./dbcli task 17 "19th-century_works" "1887_directorial_debut_films"'
-task18Command='./dbcli task 18 "19th-century_works" "1887_directorial_debut_films" 15 50'
+task10Command='./dbcli task 10'
+task16Command='./dbcli task 16 "Tourism_in_Uttarakhand" 6 6'
+task17Command='./dbcli task 17 "19th-century_works" "1887_directorial_debut_films" 6'
+task18Command='./dbcli task 18 "19th-century_works" "1887_directorial_debut_films" 5'
 
 # -----------------------------------------------------------------------------
 # Uncomment commands for tasks you want to run
